@@ -221,7 +221,7 @@ detect_vf() {
 
 # Parse the first "vGPU type ID: N" line out of list-creatable output.
 first_creatable_type() {
-	"$VGPU_MGMT" list-creatable "${DEV_ARG[@]}" 2>/dev/null \
+        "$VGPU_MGMT" list-creatable -b "$PF" "${DEV_ARG[@]}" 2>/dev/null \
 		| awk '/vGPU type ID:/ { print $5; exit }'
 }
 
@@ -414,8 +414,8 @@ fi
 # 0. add-type -- upload the vGPU type metadata blob to GSP. Until this
 #    succeeds list-supported / list-creatable have nothing to return,
 #    so this must come first.
-run_step "add-type -f ${METADATA_BIN#$SCRIPT_DIR/} -p $PCI_ID" "ADD_VGPU_TYPE: OK" \
-	add-type -f "$METADATA_BIN" -p "$PCI_ID" || true
+run_step "add-type -b $PF -f ${METADATA_BIN#$SCRIPT_DIR/} -p $PCI_ID" "ADD_VGPU_TYPE: OK" \
+        add-type -b "$PF" -f "$METADATA_BIN" -p "$PCI_ID" || true
 
 # Now that types are uploaded, resolve TYPE_ID if the user didn't pin one.
 if [[ -z "$TYPE_ID" ]]; then
@@ -429,8 +429,8 @@ if [[ -z "$TYPE_ID" ]]; then
 fi
 
 # 1. list-supported
-run_step "list-supported" "QUERY_SUPPORTED_VGPU_TYPES: OK" \
-	list-supported || true
+run_step "list-supported -b $PF" "QUERY_SUPPORTED_VGPU_TYPES: OK" \
+        list-supported -b "$PF" || true
 
 # 2. query-props for every supported type ID. Uses the type IDs we just
 #    captured in $LAST_OUTPUT from list-supported, so we don't have to
@@ -441,8 +441,8 @@ if [[ -z "$SUPPORTED_IDS" ]]; then
 else
 	while read -r tid; do
 		[[ -z "$tid" ]] && continue
-		run_step "query-props -t $tid (supported)" "QUERY_VGPU_PROPERTIES: OK" \
-			query-props -t "$tid" || true
+                run_step "query-props -b $PF -t $tid (supported)" "QUERY_VGPU_PROPERTIES: OK" \
+                        query-props -b "$PF" -t "$tid" || true
 		if ! grep -qE "vgpuTypeId .*= $tid([^0-9]|$)" <<<"$LAST_OUTPUT"; then
 			fail "query-props output for type $tid missing vgpuTypeId=$tid"
 		fi
@@ -450,15 +450,15 @@ else
 fi
 
 # 3. list-creatable (and verify TYPE_ID is actually creatable right now)
-run_step "list-creatable" "QUERY_CREATABLE_VGPU_TYPES: OK" \
-	list-creatable || true
+run_step "list-creatable -b $PF" "QUERY_CREATABLE_VGPU_TYPES: OK" \
+        list-creatable -b "$PF" || true
 if ! grep -qE "vGPU type ID: $TYPE_ID([^0-9]|$)" <<<"$LAST_OUTPUT"; then
 	fail "list-creatable does not include requested type ID $TYPE_ID"
 fi
 
 # 4. query-props on the chosen type
-run_step "query-props -t $TYPE_ID" "QUERY_VGPU_PROPERTIES: OK" \
-	query-props -t "$TYPE_ID" || true
+run_step "query-props -b $PF -t $TYPE_ID" "QUERY_VGPU_PROPERTIES: OK" \
+        query-props -b "$PF" -t "$TYPE_ID" || true
 # Sanity-check that the NVKV decode emitted the type back to us.
 if ! grep -qE "vgpuTypeId .*= $TYPE_ID([^0-9]|$)" <<<"$LAST_OUTPUT"; then
 	fail "query-props output missing vgpuTypeId=$TYPE_ID"
@@ -479,8 +479,8 @@ fi
 
 # 7. list-creatable (post-assign) -- shows how the creatable set narrows
 #    once a VF on this PF has been claimed.
-run_step "list-creatable (post-assign)" "QUERY_CREATABLE_VGPU_TYPES: OK" \
-	list-creatable || true
+run_step "list-creatable -b $PF (post-assign)" "QUERY_CREATABLE_VGPU_TYPES: OK" \
+        list-creatable -b "$PF" || true
 
 # 7b. double-assign -- the tool's preflight queries the current binding
 #     before sending the assign RPC, so re-assigning a VF that already
@@ -513,8 +513,8 @@ fi
 
 # 10. list-creatable (post-deassign) -- the type we just released should be
 #     creatable again now that the VF is free.
-run_step "list-creatable (post-deassign)" "QUERY_CREATABLE_VGPU_TYPES: OK" \
-	list-creatable || true
+run_step "list-creatable -b $PF (post-deassign)" "QUERY_CREATABLE_VGPU_TYPES: OK" \
+        list-creatable -b "$PF" || true
 if ! grep -qE "vGPU type ID: $TYPE_ID([^0-9]|$)" <<<"$LAST_OUTPUT"; then
 	fail "list-creatable does not include type $TYPE_ID after deassign"
 fi
@@ -551,8 +551,8 @@ run_step_fail "assign with nonexistent BDF ($BAD_BDF_NONEXISTENT)" \
 	assign -b "$BAD_BDF_NONEXISTENT" -t "$TYPE_ID" || true
 
 # N4. query-props on an invalid type ID
-run_step_fail "query-props with invalid type ID ($BAD_TYPE_ID)" \
-	query-props -t "$BAD_TYPE_ID" || true
+run_step_fail "query-props -b $PF with invalid type ID ($BAD_TYPE_ID)" \
+        query-props -b "$PF" -t "$BAD_TYPE_ID" || true
 
 # N5. query-vf with a malformed BDF
 run_step_fail "query-vf with malformed BDF ($BAD_BDF_MALFORMED)" \
@@ -596,12 +596,12 @@ if run_step "assign -b $BDF -t $TYPE_ID (N7 setup)" "ASSIGN_VGPU_TYPE: OK" \
 fi
 
 # Snapshot the now-narrowed creatable list and the full supported list.
-if run_step "list-creatable (post-N7-setup)" "QUERY_CREATABLE_VGPU_TYPES: OK" \
-	list-creatable; then
+if run_step "list-creatable -b $PF (post-N7-setup)" "QUERY_CREATABLE_VGPU_TYPES: OK" \
+        list-creatable -b "$PF"; then
 	N7_CREATABLE="$(awk '/vGPU type ID:/ { print $5 }' <<<"$LAST_OUTPUT" | sort -u)"
 fi
-if run_step "list-supported (post-N7-setup)" "QUERY_SUPPORTED_VGPU_TYPES: OK" \
-	list-supported; then
+if run_step "list-supported -b $PF (post-N7-setup)" "QUERY_SUPPORTED_VGPU_TYPES: OK" \
+        list-supported -b "$PF"; then
 	N7_SUPPORTED="$(awk '/vGPU type ID:/ { print $5 }' <<<"$LAST_OUTPUT" | sort -u)"
 fi
 
@@ -645,8 +645,8 @@ fi
 #     silently produce no matching blobs; we grep for the specific
 #     mismatch marker so either failure mode is caught here.
 BAD_PCI_ID="0xdead"
-if run_step_fail "add-type with mismatched -p ($BAD_PCI_ID)" \
-	add-type -f "$METADATA_BIN" -p "$BAD_PCI_ID"; then
+if run_step_fail "add-type -b $PF with mismatched -p ($BAD_PCI_ID)" \
+        add-type -b "$PF" -f "$METADATA_BIN" -p "$BAD_PCI_ID"; then
 	if ! grep -qF "does not match fwctl device PCI ID" <<<"$LAST_OUTPUT"; then
 		fail "add-type -p mismatch rejection didn't include the 'does not match fwctl device PCI ID' marker"
 	fi
@@ -656,8 +656,8 @@ fi
 #     leaves anything after the options at argv[optind..], and every
 #     subcommand calls reject_extra_args() to refuse silent drops. We
 #     hit add-type here (any subcommand works); the marker is shared.
-if run_step_fail "add-type with unknown trailing arg" \
-	add-type -f "$METADATA_BIN" -p "$PCI_ID" junk_trailing_arg; then
+if run_step_fail "add-type -b $PF with unknown trailing arg" \
+        add-type -b "$PF" -f "$METADATA_BIN" -p "$PCI_ID" junk_trailing_arg; then
 	if ! grep -qF "unexpected positional argument" <<<"$LAST_OUTPUT"; then
 		fail "add-type trailing-arg rejection didn't include the 'unexpected positional argument' marker"
 	fi

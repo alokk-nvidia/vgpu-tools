@@ -27,7 +27,6 @@ static void usage_deassign(const char *prog)
 {
 	fprintf(stderr,
 		"Usage: %s [options]\n"
-		"  -d <path>     fwctl device path (default: auto-detect)\n"
 		"  -b <bdf>      VF address in PCI BDF notation [dddd:]bb:dd.f\n"
 		"                (e.g. 0000:01:00.0, 01:00.0)\n"
 		"  -h            show this help\n",
@@ -36,7 +35,6 @@ static void usage_deassign(const char *prog)
 
 int cmd_deassign(const char *prog, int argc, char **argv)
 {
-	const char *dev_path = NULL;
 	int opt, fd = -1, ret = EXIT_FAILURE;
 	struct fwctl_rpc rpc = {0};
 	struct fwctl_rpc_nova_core *req_hdr;
@@ -47,11 +45,8 @@ int cmd_deassign(const char *prog, int argc, char **argv)
 	NvU64 dbdf = 0;
 	int got_dbdf = 0;
 
-	while ((opt = getopt(argc, argv, "d:b:h")) != -1) {
+	while ((opt = getopt(argc, argv, "b:h")) != -1) {
 		switch (opt) {
-		case 'd':
-			dev_path = optarg;
-			break;
 		case 'b':
 			if (parse_dbdf(optarg, &dbdf)) {
 				fprintf(stderr, "error: invalid -b value '%s'\n", optarg);
@@ -87,18 +82,12 @@ int cmd_deassign(const char *prog, int argc, char **argv)
 		(unsigned)((dbdf >> 8) & 0xFF),
 		(unsigned)((dbdf >> 3) & 0x1F),
 		(unsigned)(dbdf & 0x7));
-
-	if (dev_path)
-		fd = open_fwctl_device(dev_path);
-	else
-		fd = open_nova_core_fwctl();
+        fd = open_nova_core_fwctl_for_dbdf(dbdf);
 
 	if (fd < 0) {
 		fprintf(stderr, "no nova-core fwctl device found\n");
 		return EXIT_FAILURE;
 	}
-
-	fprintf(stderr, "fwctl device opened\n");
 
 	/* Refuse to dispatch the deassign RPC to the wrong GSP -- catch
 	 * the case where -d points at one PF's fwctl but -b is a VF under

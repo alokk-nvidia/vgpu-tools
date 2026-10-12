@@ -41,8 +41,8 @@ top-level dispatcher lives in `vgpu-mgmt.c`.
    `info.out_device_type == FWCTL_DEVICE_TYPE_NOVA_CORE` (= 5); otherwise
    close and continue.
 
-A `-d <path>` flag short-circuits the scan; the tool still validates the
-device type before issuing an RPC.
+Commands take `-b <bdf>` and use it to select the matching nova-core
+fwctl device. If the BDF is a VF, its `physfn` is used for PF/fwctl matching.
 
 ### RPC submission
 
@@ -136,10 +136,10 @@ build version and sets `vgpuInfoCount` to one; only the first round sets
 
 **CLI:**
 ```
-vgpu-mgmt add-type [-d <path>] -f <metadata-file> -p <pci_device_id>
+vgpu-mgmt add-type -b <dbdf> -f <metadata-file> -p <pci_device_id>
 ```
 
-`-f` and `-p` are required.
+`-b`, `-f`, and `-p` are required.
 
 **Flow:**
 1. Open device.
@@ -161,7 +161,7 @@ The OUT array is sized `QUERY_VGPU_TYPES_MAX = 0x40` slots (= `MAX_VGPU_TYPES_PE
 Trailing zero entries indicate the end of the populated portion.
 The tool stops printing at the first `typeId == 0`.
 
-**CLI:** `vgpu-mgmt list-supported [-d <path>]`
+**CLI:** `vgpu-mgmt list-supported -b <dbdf>`
 
 **Flow:**
 1. Open device.
@@ -183,7 +183,7 @@ VFs bound the two lists match; once any VF is bound, the plan locks and
 `creatable` narrows to the co-resident family of types. See the
 [Preflight helpers](#preflight-helpers) section for examples.
 
-**CLI:** `vgpu-mgmt list-creatable [-d <path>]`
+**CLI:** `vgpu-mgmt list-creatable -b <dbdf>`
 
 ### 4. `FWCTL_CMD_NOVA_CORE_GMCAPI_ASSIGN_VGPU_TYPE` — opcode 4
 **Subcommand:** `vgpu-mgmt assign`
@@ -203,7 +203,7 @@ NvU16 placementId;   // optional placement hint, 16-bit
 
 **CLI:**
 ```
-vgpu-mgmt assign [-d <path>] -b <dbdf> -t <type_id> [-s <swizz>] [-p <placement>]
+vgpu-mgmt assign -b <dbdf> -t <type_id> [-s <swizz>] [-p <placement>]
 ```
 
 `-b` accepts both `dddd:bb:dd.f` and `bb:dd.f` forms (domain defaults to 0)
@@ -236,7 +236,7 @@ via `parse_dbdf()` in `fwctl_common.c`.
 | **IN**    | request header + `struct GmcapiDeassignVgpuTypeInParams` (`{ NvU64 dbdf; }`) |
 | **OUT**   | response header only |
 
-**CLI:** `vgpu-mgmt deassign [-d <path>] -b <dbdf>`
+**CLI:** `vgpu-mgmt deassign -b <dbdf>`
 
 **Flow:** symmetric to ASSIGN but with no type-id needed — the firmware
 already tracks which vGPU type currently owns this VF and releases it.
@@ -253,10 +253,10 @@ The OUT payload is a self-describing NVKV (key/value) stream.
 Worst-case wire size: 39 NvU64 words = 312 bytes
 (see `VGPUCONFIG_GMCAPI_QUERY_VGPU_NVKV_MAX_OUT_WORDS`).
 
-**CLI:** `vgpu-mgmt query-props [-d <path>] -t <type_id>`
+**CLI:** `vgpu-mgmt query-props -b <dbdf> -t <type_id>`
 
 **Flow:**
-1. Parse `-t`.
+1. Parse `-b` and `-t`.
 2. Open device.
 3. Preflight: `vgpu_type_is_supported(-t)` — bail with "not in the
    supported list" if the type is unknown to GSP.
@@ -287,7 +287,7 @@ NvU32 swizzId;       // reserved
 NvU16 placementId;   // reserved
 ```
 
-**CLI:** `vgpu-mgmt query-vf [-d <path>] -b <dbdf>`
+**CLI:** `vgpu-mgmt query-vf -b <dbdf>`
 
 **Flow:**
 1. Parse `-b`.
@@ -339,6 +339,6 @@ so no intermediate `.o` or `.d` files are produced.
 | Metadata / RM headers | `include/metadata.h` (vGPU metadata binary layout: `METADATA_IDR`, `metadata_hdr`, `metadata_blob_hdr`, `CONFIG_BLOB_VGPU_TYPE`, `crc32_le`); consumed by `add-type` to walk the metadata file produced by that tool |
 | NVKV (libraries fork) | `nvkv.h`, `nvkv.c`, `nvkv_stub_defs.h` (userspace stubs for kernel `portMem*`/`REF_*`/`NV_*` machinery) |
 | Dispatcher            | `vgpu-mgmt.c` (top-level `main`, subcommand table) |
-| Shared helpers        | `fwctl_common.{c,h}` — device discovery (`open_nova_core_fwctl`, `open_fwctl_device`), BDF parsing (`parse_dbdf`), PF/VF + vendor gates (`check_*_dbdf`), GSP preflights (`vgpu_query_assigned_type`, `vgpu_type_is_supported`, `vgpu_type_is_creatable`), `QUERY_VGPU_TYPES_MAX`, and the `cmd_*` declarations |
+| Shared helpers        | `fwctl_common.{c,h}` — device discovery (`open_nova_core_fwctl_for_dbdf`), BDF parsing (`parse_dbdf`), PF/VF + vendor gates (`check_*_dbdf`), GSP preflights (`vgpu_query_assigned_type`, `vgpu_type_is_supported`, `vgpu_type_is_creatable`), `QUERY_VGPU_TYPES_MAX`, and the `cmd_*` declarations |
 | Subcommand sources    | one `nv_*.c` per opcode, each exporting a `cmd_*` entry point |
 | FSP PRC subcommands   | `nv_query_vgpu_mode.c`, `nv_set_vgpu_mode.c`, `prc_knob.{c,h}` — direct BAR0 mailbox path, not an RPC |

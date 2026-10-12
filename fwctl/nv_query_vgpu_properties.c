@@ -48,7 +48,7 @@ static void usage_query_props(const char *prog)
 {
 	fprintf(stderr,
 		"Usage: %s [options]\n"
-		"  -d <path>     fwctl device path (default: auto-detect)\n"
+		"  -b <bdf>      PCI BDF used to select the matching nova-core fwctl device\n"
 		"  -t <type_id>  vGPU type ID to query\n"
 		"  -h            show this help\n",
 		prog);
@@ -127,7 +127,6 @@ static int decode_nvkv(const NvU64 *kv, NvU32 word_count, nvidia_get_vgpu_proper
 
 int cmd_query_props(const char *prog, int argc, char **argv)
 {
-	const char *dev_path = NULL;
 	int opt, fd = -1, ret = EXIT_FAILURE;
 	struct fwctl_rpc rpc = {0};
 	struct fwctl_rpc_nova_core *req_hdr;
@@ -139,13 +138,19 @@ int cmd_query_props(const char *prog, int argc, char **argv)
 	void *in_buf = NULL;
 	void *out_buf = NULL;
 	NvU32 vgpu_type_id = 0;
+        NvU64 dbdf = 0;
 	int got_type = 0;
+        int got_dbdf = 0;
 
-	while ((opt = getopt(argc, argv, "d:t:h")) != -1) {
+	while ((opt = getopt(argc, argv, "b:t:h")) != -1) {
 		switch (opt) {
-		case 'd':
-			dev_path = optarg;
-			break;
+                case 'b':
+                        if (parse_dbdf(optarg, &dbdf)) {
+                                fprintf(stderr, "error: invalid -b value '%s'\n", optarg);
+                                return EXIT_FAILURE;
+                        }
+                        got_dbdf = 1;
+                        break;
 		case 't':
 			if (parse_u32("-t", optarg, &vgpu_type_id))
 				return EXIT_FAILURE;
@@ -169,18 +174,20 @@ int cmd_query_props(const char *prog, int argc, char **argv)
 
 	fprintf(stderr, "VGPU TYPE ID: %u (0x%x)\n",
 		vgpu_type_id, vgpu_type_id);
+        if (!got_dbdf) {
+                fprintf(stderr, "error: -b <bdf> is required\n\n");
+                usage_query_props(prog);
+                return EXIT_FAILURE;
+        }
 
-	if (dev_path)
-		fd = open_fwctl_device(dev_path);
-	else
-		fd = open_nova_core_fwctl();
+        if (check_nvidia_vendor_dbdf(dbdf) < 0)
+                return EXIT_FAILURE;
+        fd = open_nova_core_fwctl_for_dbdf(dbdf);
 
 	if (fd < 0) {
 		fprintf(stderr, "no nova-core fwctl device found\n");
 		return EXIT_FAILURE;
 	}
-
-	fprintf(stderr, "fwctl device opened\n");
 
 	{
 		int sup = vgpu_type_is_supported(fd, vgpu_type_id);

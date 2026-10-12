@@ -132,74 +132,6 @@ done:
 	return 0;
 }
 
-int open_nova_core_fwctl(void)
-{
-	struct dirent *ent;
-	DIR *dir;
-	char path[280];
-	int fd;
-
-	dir = opendir("/dev/fwctl");
-	if (!dir)
-		return -1;
-
-	while ((ent = readdir(dir)) != NULL) {
-		struct fwctl_info info = {0};
-
-		if (strncmp(ent->d_name, "fwctl", 5) != 0)
-			continue;
-
-		snprintf(path, sizeof(path), "/dev/fwctl/%s", ent->d_name);
-		fd = open(path, O_RDWR);
-		if (fd < 0)
-			continue;
-
-		info.size = sizeof(info);
-		if (ioctl(fd, FWCTL_INFO, &info) == 0 &&
-		    info.out_device_type == FWCTL_DEVICE_TYPE_NOVA_CORE) {
-			fprintf(stderr, "using %s (device_type=%u)\n",
-				path, info.out_device_type);
-			closedir(dir);
-			return fd;
-		}
-
-		close(fd);
-	}
-
-	closedir(dir);
-	return -1;
-}
-
-int open_fwctl_device(const char *dev_path)
-{
-	struct fwctl_info info = {0};
-	int fd;
-
-	fd = open(dev_path, O_RDWR);
-	if (fd < 0) {
-		perror("open fwctl device");
-		return -1;
-	}
-
-	info.size = sizeof(info);
-	if (ioctl(fd, FWCTL_INFO, &info)) {
-		perror("ioctl(FWCTL_INFO)");
-		close(fd);
-		return -1;
-	}
-
-	if (info.out_device_type != FWCTL_DEVICE_TYPE_NOVA_CORE) {
-		fprintf(stderr, "%s is not a nova-core device (type=%u)\n",
-			dev_path, info.out_device_type);
-		close(fd);
-		return -1;
-	}
-
-	fprintf(stderr, "using %s (device_type=%u)\n",
-		dev_path, info.out_device_type);
-	return fd;
-}
-
 static int check_nvidia_vendor(const char *bdf)
 {
 	char path[256];
@@ -543,6 +475,79 @@ static int fwctl_get_pf_bdf(int fd, char *out_bdf, size_t out_sz)
 	snprintf(sysfs_link, sizeof(sysfs_link),
 		 "/sys/class/fwctl/%s/device", name);
 	return readlink_basename(sysfs_link, out_bdf, out_sz);
+}
+
+static int dbdf_to_fwctl_pf_bdf(NvU64 dbdf,
+                                char *request_bdf, size_t request_sz,
+                                char *pf_bdf, size_t pf_sz)
+{
+        char physfn_link[320];
+
+        format_dbdf(dbdf, request_bdf, request_sz);
+
+        if (!dbdf_has_physfn(request_bdf)) {
+                if (snprintf(pf_bdf, pf_sz, "%s", request_bdf) >= (int)pf_sz) {
+                        fprintf(stderr, "PCI BDF '%s' too long\n", request_bdf);
+                        return -1;
+                }
+                return 0;
+        }
+
+        snprintf(physfn_link, sizeof(physfn_link),
+                 "/sys/bus/pci/devices/%s/physfn", request_bdf);
+        return readlink_basename(physfn_link, pf_bdf, pf_sz);
+}
+
+int open_nova_core_fwctl_for_dbdf(NvU64 dbdf)
+{
+        struct dirent *ent;
+        DIR *dir;
+        char path[280];
+        char request_bdf[16];
+        char target_pf_bdf[16];
+        char fwctl_pf_bdf[16];
+        int fd;
+
+        if (dbdf_to_fwctl_pf_bdf(dbdf, request_bdf, sizeof(request_bdf),
+                                 target_pf_bdf, sizeof(target_pf_bdf)))
+                return -1;
+
+        dir = opendir("/dev/fwctl");
+        if (!dir)
+                return -1;
+
+        while ((ent = readdir(dir)) != NULL) {
+                struct fwctl_info info = {0};
+
+                if (strncmp(ent->d_name, "fwctl", 5) != 0)
+                        continue;
+
+                snprintf(path, sizeof(path), "/dev/fwctl/%s", ent->d_name);
+                fd = open(path, O_RDWR);
+                if (fd < 0)
+                        continue;
+
+                info.size = sizeof(info);
+                if (ioctl(fd, FWCTL_INFO, &info) ||
+                    info.out_device_type != FWCTL_DEVICE_TYPE_NOVA_CORE) {
+                        close(fd);
+                        continue;
+                }
+
+                if (fwctl_get_pf_bdf(fd, fwctl_pf_bdf, sizeof(fwctl_pf_bdf)) == 0 &&
+                    strcmp(fwctl_pf_bdf, target_pf_bdf) == 0) {
+                        closedir(dir);
+                        return fd;
+                }
+
+                close(fd);
+        }
+
+        closedir(dir);
+        fprintf(stderr,
+                "no nova-core fwctl device found for PCI device %s (PF %s)\n",
+                request_bdf, target_pf_bdf);
+        return -1;
 }
 
 int fwctl_check_vf_matches(int fd, NvU64 vf_dbdf)

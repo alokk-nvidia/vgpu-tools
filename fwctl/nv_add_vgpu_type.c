@@ -68,7 +68,7 @@ static void usage_add_type(const char *prog)
 {
 	fprintf(stderr,
 		"Usage: %s [options]\n"
-		"  -d <path>     fwctl device path (default: auto-detect)\n"
+		"  -b <bdf>      PCI BDF used to select the matching nova-core fwctl device\n"
 		"  -f <path>     vGPU metadata binary file\n"
 		"  -p <hex_id>   PCI device ID to match (e.g. 0x27b8)\n"
 		"  -h            show this help\n",
@@ -358,21 +358,26 @@ static int send_all_vgpu_types(int fd, const void *file_base,
 
 int cmd_add_type(const char *prog, int argc, char **argv)
 {
-	const char *dev_path = NULL;
 	const char *meta_path = NULL;
 	uint64_t device_id = 0;
 	NvU32 actual_device_id = 0;
+        NvU64 dbdf = 0;
 	int got_pci = 0;
+        int got_dbdf = 0;
 	int opt, fd = -1, meta_fd = -1, ret = EXIT_FAILURE;
 	struct stat st;
 	void *meta_mem = MAP_FAILED;
 	struct metadata_hdr *mhdr;
 
-	while ((opt = getopt(argc, argv, "d:f:p:h")) != -1) {
+	while ((opt = getopt(argc, argv, "b:f:p:h")) != -1) {
 		switch (opt) {
-		case 'd':
-			dev_path = optarg;
-			break;
+                case 'b':
+                        if (parse_dbdf(optarg, &dbdf)) {
+                                fprintf(stderr, "error: invalid -b value '%s'\n", optarg);
+                                return EXIT_FAILURE;
+                        }
+                        got_dbdf = 1;
+                        break;
 		case 'f':
 			meta_path = optarg;
 			break;
@@ -401,17 +406,20 @@ int cmd_add_type(const char *prog, int argc, char **argv)
 	}
 
 	/* Open fwctl device */
-	if (dev_path)
-		fd = open_fwctl_device(dev_path);
-	else
-		fd = open_nova_core_fwctl();
+        if (!got_dbdf) {
+                fprintf(stderr, "error: -b <bdf> is required\n\n");
+                usage_add_type(prog);
+                return EXIT_FAILURE;
+        }
+
+        if (check_nvidia_vendor_dbdf(dbdf) < 0)
+                return EXIT_FAILURE;
+        fd = open_nova_core_fwctl_for_dbdf(dbdf);
 
 	if (fd < 0) {
 		fprintf(stderr, "no nova-core fwctl device found\n");
 		return EXIT_FAILURE;
 	}
-
-	fprintf(stderr, "fwctl device opened\n");
 
 	/* Reject -p values that don't match the underlying hardware before
 	 * we touch the metadata file -- a mismatched device_id would either

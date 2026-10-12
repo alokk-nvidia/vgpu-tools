@@ -19,16 +19,13 @@
 #define QUERY_VGPU_TYPES_MAX 0x40
 
 /*
- * Scan /dev/fwctl for the first nova-core device and return an open RDWR fd.
- * Returns -1 if no nova-core device is found.
+ * Scan /dev/fwctl for the nova-core device whose underlying PF matches
+ * the given PCI device. If dbdf is a VF, the VF's physfn is used for
+ * matching; otherwise dbdf itself is treated as the PF. Returns -1 if
+ * no matching nova-core device is found.
  */
-int open_nova_core_fwctl(void);
+int open_nova_core_fwctl_for_dbdf(NvU64 dbdf);
 
-/*
- * Open the given fwctl device path RDWR and verify it reports
- * FWCTL_DEVICE_TYPE_NOVA_CORE. Returns -1 on any failure.
- */
-int open_fwctl_device(const char *dev_path);
 
 /*
  * Parse PCI BDF notation [domain:]bus:device.function (e.g. 0000:01:00.0,

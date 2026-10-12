@@ -27,14 +27,13 @@ static void usage_list_creatable(const char *prog)
 {
 	fprintf(stderr,
 		"Usage: %s [options]\n"
-		"  -d <path>     fwctl device path (default: auto-detect)\n"
+		"  -b <bdf>      PCI BDF used to select the matching nova-core fwctl device\n"
 		"  -h            show this help\n",
 		prog);
 }
 
 int cmd_list_creatable(const char *prog, int argc, char **argv)
 {
-	const char *dev_path = NULL;
 	int opt, fd = -1, ret = EXIT_FAILURE;
 	struct fwctl_rpc rpc = {0};
 	struct fwctl_rpc_nova_core req_hdr = {0};
@@ -44,12 +43,18 @@ int cmd_list_creatable(const char *prog, int argc, char **argv)
 	struct fwctl_rpc_nova_core *resp_hdr;
 	NvU32 *vgpu_type_ids;
 	uint32_t i, n;
+        NvU64 dbdf = 0;
+        int got_dbdf = 0;
 
-	while ((opt = getopt(argc, argv, "d:h")) != -1) {
+	while ((opt = getopt(argc, argv, "b:h")) != -1) {
 		switch (opt) {
-		case 'd':
-			dev_path = optarg;
-			break;
+                case 'b':
+                        if (parse_dbdf(optarg, &dbdf)) {
+                                fprintf(stderr, "error: invalid -b value '%s'\n", optarg);
+                                return EXIT_FAILURE;
+                        }
+                        got_dbdf = 1;
+                        break;
 		case 'h':
 		default:
 			usage_list_creatable(prog);
@@ -59,18 +64,20 @@ int cmd_list_creatable(const char *prog, int argc, char **argv)
 
 	if (reject_extra_args(prog, argc, argv))
 		return EXIT_FAILURE;
+        if (!got_dbdf) {
+                fprintf(stderr, "error: -b <bdf> is required\n\n");
+                usage_list_creatable(prog);
+                return EXIT_FAILURE;
+        }
 
-	if (dev_path)
-		fd = open_fwctl_device(dev_path);
-	else
-		fd = open_nova_core_fwctl();
+        if (check_nvidia_vendor_dbdf(dbdf) < 0)
+                return EXIT_FAILURE;
+        fd = open_nova_core_fwctl_for_dbdf(dbdf);
 
 	if (fd < 0) {
 		fprintf(stderr, "no nova-core fwctl device found\n");
 		return EXIT_FAILURE;
 	}
-
-	fprintf(stderr, "fwctl device opened\n");
 
 	ret = posix_memalign(&out_buf, 16, out_size);
 	if (ret) {

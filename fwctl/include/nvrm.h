@@ -66,6 +66,17 @@ enum fwctl_cmd_nova_core {
 	 *       fwctl_rpc_nova_core + GmcapiQueryAssignedVfVgpuTypeOutParams OUT.
 	 */
 	FWCTL_CMD_NOVA_CORE_GMCAPI_QUERY_ASSIGNED_VF_VGPU_TYPE = 0x00020007,
+        /*
+         * Set one parameter on the pGPU selected by the fwctl device.
+         * Wire: fwctl_rpc_nova_core + GmcapiParamsInParams + NVKV IN;
+         *       fwctl_rpc_nova_core (no payload) OUT.
+         */
+        FWCTL_CMD_NOVA_CORE_GMCAPI_SET_PARAMS = 0x00050001,
+        /*
+         * Query one parameter on the selected pGPU, including SCHED_CAPS
+         * preflight for SET. Returns a parameter-specific NVKV payload.
+         */
+        FWCTL_CMD_NOVA_CORE_GMCAPI_GET_PARAMS = 0x00050002,
 };
 
 /* Matches include/uapi/fwctl/nova-core.h in the kernel uAPI. */

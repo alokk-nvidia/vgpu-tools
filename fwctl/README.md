@@ -17,9 +17,9 @@ Each opcode is reached via a subcommand (see [Command catalog](#command-catalog)
 vgpu-mgmt <subcommand> [options]
 ```
 
-Every subcommand opens a `/dev/fwctl/fwctlN` character device (or one
-specified via `-d`), validates the device is a nova-core endpoint, and
-submits a single GMCAPI command via the `FWCTL_RPC` ioctl.
+GMCAPI subcommands require `-b <bdf>`, open the matching
+`/dev/fwctl/fwctlN` character device, validate it is a nova-core endpoint,
+and submit commands through `FWCTL_RPC`.
 
 The kernel-side handler routes the request to the GSP-RM firmware over
 MCTP/NVDM and returns the raw response.
@@ -37,9 +37,9 @@ top-level dispatcher lives in `vgpu-mgmt.c`.
 2. `open(path, O_RDWR)` then `ioctl(fd, FWCTL_INFO, &info)` (`fwctl_info` is
    filled with `info.size = sizeof(info)`).
 
-3. Accept the descriptor when
-   `info.out_device_type == FWCTL_DEVICE_TYPE_NOVA_CORE` (= 5); otherwise
-   close and continue.
+3. Require `info.out_device_type == FWCTL_DEVICE_TYPE_NOVA_CORE` (= 8)
+   and match the device's PCI parent in sysfs to the PF selected by `-b`.
+   Close nonmatching descriptors and continue.
 
 Commands take `-b <bdf>` and use it to select the matching nova-core
 fwctl device. If the BDF is a VF, its `physfn` is used for PF/fwctl matching.
@@ -58,8 +58,9 @@ struct fwctl_rpc rpc = {
 ioctl(fd, FWCTL_RPC, &rpc);
 ```
 
-`in_buf` and `out_buf` are 16-byte-aligned via `posix_memalign` and
-zero-initialised. The buffers are laid out as
+Heap-allocated RPC buffers use `posix_memalign` for 16-byte alignment.
+The parameter commands also use `_Alignas(16)` for stack response buffers.
+Request headers and padding are zero-initialised. The buffers are laid out as
 
 ```
 in_buf  : struct fwctl_rpc_nova_core + command-specific IN payload
@@ -119,7 +120,7 @@ entirely).
 
 ## Command catalog
 
-### 1. `FWCTL_CMD_NOVA_CORE_GMCAPI_ADD_VGPU_TYPE` — opcode 1
+### 1. `FWCTL_CMD_NOVA_CORE_GMCAPI_ADD_VGPU_TYPE` — command `0x00020001`
 **Subcommand:** `vgpu-mgmt add-type`
 
 | Direction | Layout |
@@ -149,7 +150,7 @@ vgpu-mgmt add-type -b <dbdf> -f <metadata-file> -p <pci_device_id>
 4. Build and issue one aligned `FWCTL_RPC` request per vGPU info record.
 5. Bail on the first ioctl failure.
 
-### 2. `FWCTL_CMD_NOVA_CORE_GMCAPI_QUERY_SUPPORTED_VGPU_TYPES` — opcode 2
+### 2. `FWCTL_CMD_NOVA_CORE_GMCAPI_QUERY_SUPPORTED_VGPU_TYPES` — command `0x00020002`
 **Subcommand:** `vgpu-mgmt list-supported`
 
 | Direction | Layout |
@@ -172,11 +173,11 @@ The tool stops printing at the first `typeId == 0`.
 4. On ioctl success, walk the array printing each type ID until a zero
    sentinel is hit.
 
-### 3. `FWCTL_CMD_NOVA_CORE_GMCAPI_QUERY_CREATABLE_VGPU_TYPES` — opcode 3
+### 3. `FWCTL_CMD_NOVA_CORE_GMCAPI_QUERY_CREATABLE_VGPU_TYPES` — command `0x00020003`
 **Subcommand:** `vgpu-mgmt list-creatable`
 
-Identical wire shape, OUT buffer sizing, and flow as opcode 2 — only the
-filtering performed by the firmware differs. "Supported" returns every
+Identical wire shape, OUT buffer sizing, and flow as command `0x00020002`.
+The filtering performed by the firmware differs. "Supported" returns every
 type the GPU can theoretically host; "creatable" returns those that are
 *currently compatible with the PF's locked placement plan*. With zero
 VFs bound the two lists match; once any VF is bound, the plan locks and
@@ -185,7 +186,7 @@ VFs bound the two lists match; once any VF is bound, the plan locks and
 
 **CLI:** `vgpu-mgmt list-creatable -b <dbdf>`
 
-### 4. `FWCTL_CMD_NOVA_CORE_GMCAPI_ASSIGN_VGPU_TYPE` — opcode 4
+### 4. `FWCTL_CMD_NOVA_CORE_GMCAPI_ASSIGN_VGPU_TYPE` — command `0x00020004`
 **Subcommand:** `vgpu-mgmt assign`
 
 | Direction | Layout |
@@ -228,7 +229,7 @@ via `parse_dbdf()` in `fwctl_common.c`.
 6. Issue `FWCTL_RPC`. On success the firmware now considers the VF
    claimed by that vGPU type until DEASSIGN.
 
-### 5. `FWCTL_CMD_NOVA_CORE_GMCAPI_DEASSIGN_VGPU_TYPE` — opcode 5
+### 5. `FWCTL_CMD_NOVA_CORE_GMCAPI_DEASSIGN_VGPU_TYPE` — command `0x00020005`
 **Subcommand:** `vgpu-mgmt deassign`
 
 | Direction | Layout |
@@ -241,7 +242,7 @@ via `parse_dbdf()` in `fwctl_common.c`.
 **Flow:** symmetric to ASSIGN but with no type-id needed — the firmware
 already tracks which vGPU type currently owns this VF and releases it.
 
-### 6. `FWCTL_CMD_NOVA_CORE_GMCAPI_QUERY_VGPU_PROPERTIES` — opcode 6
+### 6. `FWCTL_CMD_NOVA_CORE_GMCAPI_QUERY_VGPU_PROPERTIES` — command `0x00020006`
 **Subcommand:** `vgpu-mgmt query-props`
 
 | Direction | Layout |
@@ -272,7 +273,7 @@ Worst-case wire size: 39 NvU64 words = 312 bytes
    `(no properties returned -- GSP does not recognize this type)`
    line is appended.
 
-### 7. `FWCTL_CMD_NOVA_CORE_GMCAPI_QUERY_ASSIGNED_VF_VGPU_TYPE` — opcode 7
+### 7. `FWCTL_CMD_NOVA_CORE_GMCAPI_QUERY_ASSIGNED_VF_VGPU_TYPE` — command `0x00020007`
 **Subcommand:** `vgpu-mgmt query-vf`
 
 | Direction | Layout |
@@ -315,18 +316,279 @@ invalid registers (typically faults).
 
 ---
 
+### 9. `FWCTL_CMD_NOVA_CORE_GMCAPI_SET_PARAMS` — command `0x00050001`
+
+**Subcommand:** `vgpu-mgmt set-params`
+
+`SET_PARAMS` uses a common envelope followed by an NVKV payload. The `-b`
+BDF selects the matching nova-core FWCTL device and is sent unchanged as
+`dbdf`. It must be the actual nonzero PF or VF DBDF; GSP derives the
+target scope and validates ownership against the selected PF. Scheduler
+parameters currently require a PF BDF.
+
+Parameter IDs are shared by GET and SET within each target namespace.
+`gmcapi_pgpu_params_param_id` defines `SCHED_CAPS = 1`, `SCHED_STATE = 2`
+and `SCHED_LOG = 3`; `gmcapi_vgpu_params_param_id` currently contains only
+`INVALID = 0`. Separate GET and SET descriptor tables determine which
+operations a parameter supports. SCHED_STATE supports both; SCHED_CAPS and
+SCHED_LOG currently support GET only.
+
+SET SCHED_STATE now uses parameter ID **2**, matching GET SCHED_STATE.
+Use matching FWCTL and GSP firmware; older GSP firmware expects SET ID 1.
+
+The first registered parameter is `sched-state`:
+
+```sh
+vgpu-mgmt set-params -b 0000:9b:00.0 -P sched-state \
+    --policy 2 \
+    -asf 480 -aavg 8
+```
+
+This follows production NVML's non-MIG `cDeviceSetVgpuObjschedState_v2`
+contract. The tool translates the user policy before sending it; the user
+and RM policy enumerations are not interchangeable.
+
+| Input | Meaning and validation | Wire value |
+|-------|------------------------|------------|
+| `-b`, `--bdf` | Required NVIDIA PF BDF for scheduler parameters; selects the FWCTL endpoint | Actual packed PF `dbdf` |
+| `-P`, `--param sched-state` | Required parameter descriptor | `GMCAPI_PGPU_PARAMS_PARAM_ID_SCHED_STATE = 2` |
+| `-p 1` | Best Effort; rejects either ARR option, including explicit zero | RM policy `2` |
+| `-p 2` | Equal Share; accepts optional ARR inputs | RM policy `3` |
+| `-p 3` | Fixed Share; accepts optional ARR inputs | RM policy `4` |
+| `-asf`, `--arr-frequency` | Optional U32 frequency in Hz; nonzero must be within GPU-reported limits (currently 63..960) | `NVGMC_PARAMS_SCHED_STATE_FREQUENCY_FOR_ARR` |
+| `-aavg`, `--arr-avg-factor` | Optional U32 averaging factor; nonzero must be within GPU-reported limits (currently 1..60) | `NVGMC_PARAMS_SCHED_STATE_AVG_FACTOR_FOR_ARR` |
+
+The scheduler engine is always `NV2080_ENGINE_TYPE_GRAPHICS` (`GR0`, value
+`1`); there is no engine, GI, timeslice, or ARR enable/disable CLI option.
+`-p` / `--policy` is required; omitting it does not select a default policy.
+Negative, overflowing, malformed and duplicate inputs are rejected.
+An omitted ARR key is not encoded. An explicit zero is encoded and selects
+the same firmware defaults: default frequency/timeslices and averaging
+factor 33, rather than retaining the previous setting.
+
+After validating CLI syntax and the required policy, the tool sends read-only `GET_PARAMS`
+(`0x00050002`) for pGPU `SCHED_STATE` (`paramId = 2`) and GR0. If
+`NVGMC_PARAMS_SCHED_STATE_ACTIVE_VGPU_COUNT` is nonzero, it fails with a
+message identifying the active count and does not send SET. For example:
+
+```text
+error: vGPU scheduler state cannot be configured while vGPU instance is active on this GPU [vGPU count = 1]; stop all vGPU instances and retry
+```
+
+With zero active vGPUs, it checks that any ARR options require Equal Share
+(`-p 2`) or Fixed Share (`-p 3`), including when those options are zero. Thus
+an active-vGPU error takes precedence over the Best Effort/ARR error.
+It then queries pGPU `SCHED_CAPS` (`paramId = 1`) and
+validates the returned schema, policy support, ARR support, and limits,
+matching NVML's capability validation. Only then does it submit `SET_PARAMS`
+(`0x00050001`) with the common 16-byte parameter envelope and two to four
+NVKV words. A failed or malformed preflight response also prevents SET.
+Permission checks for active vGPUs, channels and scheduler state remain
+authoritative in GSP-RM, including when a vGPU starts after the preflight.
+
+Both command IDs must be allowed under `FWCTL_RPC_CONFIGURATION` by the
+running Nova driver, and the GSP firmware must support the current common
+GET/SET_PARAMS ABI. Rebuild and load the updated Nova driver before using
+this command; changing only the userspace binary will otherwise fail with
+`EPERM`. Firmware rejection is currently surfaced by Nova as `EIO`; the
+FWCTL response header does not contain a separate RM status field.
+
+SET returns **status only**, not scheduler settings or an NVKV output
+payload. For the example above, successful completion prints:
+
+```text
+SET_PARAMS sched-state: OK
+```
+
+With default ARR values:
+
+```sh
+vgpu-mgmt set-params -b 0000:9b:00.0 -P sched-state -p 3
+```
+
+That request contains two NVKV words (engine and policy). Read back
+effective settings separately; the success message is not a readback.
+The descriptor table in `nv_set_params.c` remains the extension point for
+future pGPU parameter encoders and optional preflight checks. No vGPU SET
+parameter is registered.
+
+### 10. `FWCTL_CMD_NOVA_CORE_GMCAPI_GET_PARAMS` — command `0x00050002`
+
+**Subcommand:** `vgpu-mgmt get-params`
+
+```sh
+vgpu-mgmt get-params -b 0000:9b:00.0 -P sched-caps
+vgpu-mgmt get-params -b 0000:9b:00.0 -P sched-state
+vgpu-mgmt get-params -b 0000:9b:00.0 -P sched-log
+```
+
+Parameter names are exact: use `sched-log` (singular). `sched-logs` is
+unsupported and is rejected by the CLI before any RPC is sent.
+
+Both `-b` / `--bdf` and `-P` / `--param` are required. The BDF must identify
+an NVIDIA PF and selects one pGPU. Like production NVML's pGPU scheduler
+queries, the engine is always `NV2080_ENGINE_TYPE_GRAPHICS` (GR0, value 1).
+There are no policy, ARR, engine or GI input options for these queries.
+
+GET and SET infer the target from `-b`; `-t` and `--target` are not
+accepted. Descriptors still declare their supported PF/VF scope, so scheduler
+parameters reject a VF before sending any RPC. There are no registered vGPU
+parameter handlers yet. Future vGPU parameters need their own descriptor,
+handler and VF BDF validation; the existing FWCTL device lookup resolves a
+VF's `physfn` to select its owning PF endpoint.
+
+GET, SET and SET's preflight queries pass the same actual nonzero DBDF
+through `struct fwctl_params_target` to the shared transport. The 16-byte
+wire envelope has only `dbdf` and `paramId` as named header fields.
+`paramId` is at byte 8; the aligned NVKV word array starts at byte 16, with
+compiler padding between them. This parameter envelope has no reserved field
+or explicit target type; the separate 8-byte FWCTL header retains its zero
+`reserved` field. Zero or noncanonical DBDFs are rejected. Use matching
+updated FWCTL and GSP firmware: older firmware
+expects an explicit `targetType` and zero for pGPU requests. Builds with the
+previous explicit reserved field also use a different `paramId` offset and
+must be updated together.
+
+CAPS and STATE each send one GET_PARAMS RPC. Every scheduler query consists of
+the 8-byte FWCTL header, the 16-byte common parameter envelope, and one
+NVKV word with key `NVGMC_PARAMS_SCHED_STATE_ENGINE_ID`, index zero, and
+value `NV2080_ENGINE_TYPE_GRAPHICS` (`1`).
+The envelope uses the actual PF `dbdf`. Parameter IDs are:
+
+| CLI parameter | shared pGPU parameter ID | Response payload |
+|---------------|-----------------------|------------------|
+| `sched-caps` | `GMCAPI_PGPU_PARAMS_PARAM_ID_SCHED_CAPS = 1` | Ten NVKV words / 80 bytes |
+| `sched-state` | `GMCAPI_PGPU_PARAMS_PARAM_ID_SCHED_STATE = 2` | Five NVKV words / 40 bytes |
+| `sched-log` | `GMCAPI_PGPU_PARAMS_PARAM_ID_SCHED_LOG = 3` | Six metadata words + 17 words per entry; 48..13,648 bytes |
+
+Here a word is one `NvU64` (8 bytes), including NVKV instruction words.
+For SCHED_LOG the maximum is `6 + 100 * 17 = 1,706` words. Its six metadata
+values each use one IMM32 word; each entry uses five words for four U64
+fields, three words for four packed U32 fields, and nine words for the eight
+U64 counters and their array header. These sizes describe the encoded stream,
+not the decoded C structures.
+
+The FWCTL response adds its 8-byte header to those payload sizes. Responses
+are validated in full before any result is printed: missing, duplicate,
+unknown, incorrectly indexed, mistyped or truncated fields cause failure.
+GET and SET share the transport and scheduler decoders in `nv_params.c`.
+The SET command reuses both queries for its active-vGPU and CAPS validation.
+
+`sched-caps` follows `nvmlDeviceGetVgpuSchedulerCapabilities()` and the
+`nvidia-smi vgpu -sc` field set. It prints all three supported-policy slots,
+ARR support, maximum/minimum timeslices in **nanoseconds**, scheduling
+frequency limits in **Hz**, and ARR averaging-factor limits. Firmware RM
+policies are displayed as Unknown, Best Effort, Equal Share or Fixed Share;
+raw RM policy numbers are not presented as CLI policy numbers.
+
+`sched-state` follows `nvmlDeviceGetVgpuSchedulerState_v2()` and the
+`nvidia-smi vgpu -ss` display rules. For example, an active Fixed Share
+configuration could print:
+
+```text
+GPU 0000:9B:00.0
+    Active vGPUs                    : 2
+    Scheduler Policy                : Fixed Share
+    Average Factor                  : 33
+    Time Slice(ns)                  : 2000000
+```
+
+The active count comes from `NVGMC_PARAMS_SCHED_STATE_ACTIVE_VGPU_COUNT`
+in the same response. With zero active vGPUs, or policy Best Effort/Unknown,
+only the GPU, active count and policy are printed; runtime timeslice and
+average fields are omitted, matching production display behavior. The
+response's ARR-enabled SDK enum is validated, but is not an additional v2
+display field. Current frequency is not returned by GET_STATE and is not
+inferred from the runtime timeslice. The heading uses the selected PF BDF
+rather than an NVML device index.
+
+`sched-log` follows the weighted-scheduler `nvidia-smi vgpu -sl` display and
+polling behavior. It consumes ten batches of up to 100 unread records per
+cycle (up to 1,000 rows), then waits one second and repeats until Ctrl-C or
+SIGTERM. Change the delay with `-l` / `--loop` (1..10 seconds). Use `--once`
+for one ten-read cycle without waiting:
+
+```sh
+vgpu-mgmt get-params -b 0000:9b:00.0 -P sched-log --once
+vgpu-mgmt get-params -b 0000:9b:00.0 -P sched-log -l 2
+```
+
+These polling options apply only to `sched-log`; CAPS and STATE remain
+single queries and reject `--once` or `--loop`. A cycle performs ten
+SCHED_STATE preflight queries and, when the policy supports logging, ten
+SCHED_LOG reads. `--once` is one complete cycle, not one RPC. Best Effort or
+Unknown skips the log reads and prints the policy message for each batch.
+The engine stays fixed at GR0. Each batch prints the GPU
+BDF, engine ID, scheduler policy, averaging factor and timeslice, followed
+by the same entry fields as weighted `-sl`:
+
+| Entry column | Value |
+|--------------|-------|
+| GPU | Selected PF BDF in uppercase |
+| SW Runlist Id | Scheduler VM-set/runlist identifier |
+| Weight(0x) | Raw hexadecimal scheduler weight |
+| Timestamp(ns) | Firmware timestamp |
+| Cumulative Run Time(ns) | Signed cumulative runtime, preserving the SDK NvS64 value |
+| Prev Timeslice Runtime(ns) | Runtime of the previous timeslice |
+| Target Time Slice(ns) | Target timeslice for that entry |
+| Cumulative Preempt Time(ns) | Accumulated preemption debt |
+
+The decoder also preserves cumulative idle time and all eight U64 counters
+from the wire; those are not normal `-sl` display columns. Entries retain
+their firmware order and nanosecond units; rows are not synthesized.
+
+Before each batch, the tool queries SCHED_STATE for policy and active-vGPU
+count, since SCHED_LOG's COUNT is the number of records returned. Best
+Effort/Unknown prints the current policy and explains that logging is not
+supported, without issuing a failing log read. For logging-capable policies
+with zero active vGPUs, the log is still read and consumed. The tool prints
+the engine, policy, and `GPU <BDF> has no active VM runlist.` without runtime
+fields or rows.
+An active GPU with an empty buffer prints metadata and column headings with
+no rows. State and log reads are separate snapshots; firmware/transport
+errors, including a concurrent policy change that rejects a read, stop the
+command with failure. Completed earlier batches may already be printed.
+
+The full reply capacity is reserved even for empty reads: 13,648 NVKV bytes
+plus the 8-byte FWCTL header, or 13,656 bytes total. Counts over 100, missing
+or duplicate fields, entry-index gaps, entries beyond COUNT, wrong engine,
+invalid policy/ARR enums and malformed counter arrays are rejected before
+printing the batch. Log reads consume the same circular buffer as RM/NVML;
+another consumer such as `nvidia-smi -sl` can drain entries concurrently.
+
+This reply fits Nova's existing 16 KiB response budget, so no Nova driver
+response-limit change is required. Use the updated GSP firmware with its
+100-entry GMCAPI limit and the matching userspace header/decoder. The GSP
+applies this limit before decrementing the unread-record count; remaining
+records are available to later calls rather than discarded after a read.
+Production RM/NVML retains 200 entries per read and five reads per cycle;
+the GMCAPI path uses ten smaller reads for the same 1,000-entry cycle.
+
+The running Nova driver must allow GET_PARAMS under the configuration
+scope, and GSP-RM must implement this ABI and be in vGPU-host mode.
+An ioctl or firmware error returns a nonzero exit status; Nova currently
+maps a nonzero GSP status to `EIO`, so a detailed RM status is not available
+in the FWCTL reply. CAPS and STATE print the requested data and exit zero;
+they do not consume scheduler logs. SCHED_LOG consumes unread entries and
+polls until stopped, or exits after one cycle with `--once`. None of these
+GET commands changes scheduler settings.
+
+---
+
 ## Build / run
 
 ```sh
 cd vgpu-tools/fwctl
 make                                    # builds the single vgpu-mgmt binary
 ./vgpu-mgmt                             # top-level usage / subcommand list
-./vgpu-mgmt list-supported              # auto-detects /dev/fwctl/fwctlN
-./vgpu-mgmt query-props -t 1            # decodes NVKV response
+./vgpu-mgmt list-supported -b 0000:9b:00.0
+./vgpu-mgmt query-props -b 0000:9b:00.0 -t 1
 ./vgpu-mgmt assign -h                   # subcommand-specific help
+./vgpu-mgmt set-params -h                # pGPU SET_PARAMS help
+./vgpu-mgmt get-params -h                # pGPU GET_PARAMS help
 ```
 
-`make clean` removes the `vgpu-mgmt` binary. The Makefile is a one-shot
+`make clean` removes the `vgpu-mgmt` and test binaries. The Makefile is a one-shot
 build: every `.c` is recompiled and linked in a single `gcc` invocation,
 so no intermediate `.o` or `.d` files are produced.
 
@@ -335,10 +597,13 @@ so no intermediate `.o` or `.d` files are produced.
 | Area                  | Files |
 |-----------------------|-------|
 | Transport / wire      | `fwctl.h` (Linux UAPI, ioctls), `nvrm.h` (`fwctl_rpc_nova_core` header, opcodes) |
-| GMCAPI types          | `nv_vgpu.h` (params structs, NVKV keys, `nvidia_get_vgpu_properties`) |
+| GMCAPI types          | `nv_vgpu.h` (vGPU params/NVKV keys) and `gmcapi_params.h` (common GET/SET envelope, target-specific parameter IDs, scheduler NVKV keys) |
 | Metadata / RM headers | `include/metadata.h` (vGPU metadata binary layout: `METADATA_IDR`, `metadata_hdr`, `metadata_blob_hdr`, `CONFIG_BLOB_VGPU_TYPE`, `crc32_le`); consumed by `add-type` to walk the metadata file produced by that tool |
 | NVKV (libraries fork) | `nvkv.h`, `nvkv.c`, `nvkv_stub_defs.h` (userspace stubs for kernel `portMem*`/`REF_*`/`NV_*` machinery) |
 | Dispatcher            | `vgpu-mgmt.c` (top-level `main`, subcommand table) |
 | Shared helpers        | `fwctl_common.{c,h}` — device discovery (`open_nova_core_fwctl_for_dbdf`), BDF parsing (`parse_dbdf`), PF/VF + vendor gates (`check_*_dbdf`), GSP preflights (`vgpu_query_assigned_type`, `vgpu_type_is_supported`, `vgpu_type_is_creatable`), `QUERY_VGPU_TYPES_MAX`, and the `cmd_*` declarations |
+| GET/SET parameter helpers | `nv_params.c`, `fwctl_params.h` — shared parameter RPC submission, scheduler CAPS/STATE/LOG decoding and policy names |
+| Parameter subcommands | `nv_set_params.c`, `nv_get_params.c` — SET validation/encoding and GET display/polling |
+| Parameter tests | `tests/test_set_params.c`, `tests/test_get_params.c`, `tests/test_sched_log.c`, `tests/test_params_transport.c`, `tests/test_params_probe.c`, `tests/test_params_inputs.py` and `tests/params_rpc_probe.c` |
 | Subcommand sources    | one `nv_*.c` per opcode, each exporting a `cmd_*` entry point |
 | FSP PRC subcommands   | `nv_query_vgpu_mode.c`, `nv_set_vgpu_mode.c`, `prc_knob.{c,h}` — direct BAR0 mailbox path, not an RPC |

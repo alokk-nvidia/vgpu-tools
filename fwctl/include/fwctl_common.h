@@ -36,6 +36,9 @@ int open_nova_core_fwctl_for_dbdf(NvU64 dbdf);
  */
 int parse_dbdf(const char *s, NvU64 *out);
 
+/* Format a packed DBDF as a canonical domain:bus:device.function string. */
+void format_dbdf(NvU64 dbdf, char *out, size_t out_sz);
+
 /*
  * Format the packed dbdf (as produced by parse_dbdf()) into canonical
  * "dddd:bb:dd.f" form and confirm /sys/bus/pci/devices/<bdf>/vendor matches
@@ -163,6 +166,8 @@ int cmd_list_supported(const char *prog, int argc, char **argv);
 int cmd_list_creatable(const char *prog, int argc, char **argv);
 int cmd_query_vf(const char *prog, int argc, char **argv);
 int cmd_query_props(const char *prog, int argc, char **argv);
+int cmd_set_params(const char *prog, int argc, char **argv);
+int cmd_get_params(const char *prog, int argc, char **argv);
 int cmd_query_vgpu_mode(const char *prog, int argc, char **argv);
 int cmd_set_vgpu_mode(const char *prog, int argc, char **argv);
 

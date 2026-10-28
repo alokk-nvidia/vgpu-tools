@@ -207,7 +207,7 @@ static int dbdf_has_physfn(const char *bdf)
 	return S_ISLNK(st.st_mode) ? 1 : 0;
 }
 
-static void format_dbdf(NvU64 dbdf, char *out, size_t out_sz)
+void format_dbdf(NvU64 dbdf, char *out, size_t out_sz)
 {
 	snprintf(out, out_sz, "%04x:%02x:%02x.%x",
 		 (unsigned)(dbdf >> 32),

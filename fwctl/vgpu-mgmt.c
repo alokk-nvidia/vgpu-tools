@@ -19,13 +19,15 @@ struct subcommand {
 };
 
 static const struct subcommand subcommands[] = {
-	{ "add-type",       "upload vGPU type metadata blobs to GSP",        cmd_add_type       },
+	{ "add-type",       "upload vGPU type metadata blobs to GSP",         cmd_add_type       },
 	{ "assign",         "assign a vGPU type to a VF",                     cmd_assign         },
 	{ "deassign",       "deassign the vGPU type from a VF",               cmd_deassign       },
 	{ "list-supported", "list supported vGPU type IDs",                   cmd_list_supported },
 	{ "list-creatable", "list creatable vGPU type IDs",                   cmd_list_creatable },
 	{ "query-vf",       "query the vGPU type assigned to a VF",           cmd_query_vf       },
 	{ "query-props",    "query a vGPU type's properties",                 cmd_query_props    },
+	{ "set-params",     "set an NVKV parameter on a pGPU/vGPU",           cmd_set_params     },
+	{ "get-params",     "get an NVKV parameter from a pGPU/vGPU",         cmd_get_params     },
 	{ "query-vgpu-mode","query vGPU mode via FSP PRC knob (direct BAR0)", cmd_query_vgpu_mode},
 	{ "set-vgpu-mode",  "set vGPU mode via FSP PRC knob (direct BAR0)",   cmd_set_vgpu_mode  },
 };

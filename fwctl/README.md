@@ -128,12 +128,23 @@ entirely).
 | **IN**    | request header + one GMC add-vGPU-type payload |
 | **OUT**   | response header only (no payload) |
 
-The metadata is read from a file produced by `vgpu_metadata_tools`. The
-subcommand validates the identifier and CRC32, finds the nested
-`vgpu_type_blob_hdr` whose `device_id` matches `-p`, then uploads its opaque
-vGPU info records one per GMC round. Each round prepends the metadata's GSP
-build version and sets `vgpuInfoCount` to one; only the first round sets
-`discardVgpuTypes`.
+The subcommand reads `VGPUMETA` 1.0 files and checks their headers and CRC32.
+It selects the group matching the opened device's full PCI selector, including
+subsystem IDs, then uploads one opaque vGPU info record per GMC round with the
+file's GSP build version. Only the first round sets `discardVgpuTypes`.
+
+A version-1 `vgpu_type` group has a 32-byte header. Offsets are relative to
+the start of the group. Header integers use little-endian encoding.
+
+| Byte offset | Size | Field |
+|---:|---:|---|
+| `0–15` | 16 | Common group header |
+| `16–23` | 8 | Vendor, device, subsystem vendor, and subsystem device IDs (2 bytes each) |
+| `24` (`0x18`) | 4 | `record_size` in bytes |
+| `28` (`0x1c`) | 4 | `record_count` |
+| `32` onward | `record_size × record_count` | Contiguous vGPU profile records |
+
+Record `i` starts at `group_start + 32 + i * record_size`.
 
 **CLI:**
 ```
@@ -144,9 +155,8 @@ vgpu-mgmt add-type -b <dbdf> -f <metadata-file> -p <pci_device_id>
 
 **Flow:**
 1. Open device.
-2. `mmap` the metadata file; validate the identifier and CRC32 in the header.
-3. For each matching `CONFIG_BLOB_VGPU_TYPE`, validate its nested header and
-   GSP RMCTRL section.
+2. Map the metadata file and validate the VGPUMETA header and CRC32.
+3. Validate the file and locate the matching vGPU records before uploading.
 4. Build and issue one aligned `FWCTL_RPC` request per vGPU info record.
 5. Bail on the first ioctl failure.
 
@@ -598,7 +608,7 @@ so no intermediate `.o` or `.d` files are produced.
 |-----------------------|-------|
 | Transport / wire      | `fwctl.h` (Linux UAPI, ioctls), `nvrm.h` (`fwctl_rpc_nova_core` header, opcodes) |
 | GMCAPI types          | `nv_vgpu.h` (vGPU params/NVKV keys) and `gmcapi_params.h` (common GET/SET envelope, target-specific parameter IDs, scheduler NVKV keys) |
-| Metadata / RM headers | `include/metadata.h` (vGPU metadata binary layout: `METADATA_IDR`, `metadata_hdr`, `metadata_blob_hdr`, `CONFIG_BLOB_VGPU_TYPE`, `crc32_le`); consumed by `add-type` to walk the metadata file produced by that tool |
+| vGPU metadata        | `vgpumeta.c`, `include/vgpumeta.h` (VGPUMETA 1.0 reader used by `add-type`) |
 | NVKV (libraries fork) | `nvkv.h`, `nvkv.c`, `nvkv_stub_defs.h` (userspace stubs for kernel `portMem*`/`REF_*`/`NV_*` machinery) |
 | Dispatcher            | `vgpu-mgmt.c` (top-level `main`, subcommand table) |
 | Shared helpers        | `fwctl_common.{c,h}` — device discovery (`open_nova_core_fwctl_for_dbdf`), BDF parsing (`parse_dbdf`), PF/VF + vendor gates (`check_*_dbdf`), GSP preflights (`vgpu_query_assigned_type`, `vgpu_type_is_supported`, `vgpu_type_is_creatable`), `QUERY_VGPU_TYPES_MAX`, and the `cmd_*` declarations |

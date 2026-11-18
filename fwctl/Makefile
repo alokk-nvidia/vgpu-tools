@@ -22,6 +22,7 @@ SRCS := \
 	vgpu-mgmt.c \
 	fwctl_common.c \
 	nv_add_vgpu_type.c \
+	vgpumeta.c \
 	nv_assign_vgpu_type.c \
 	nv_deassign_vgpu_type.c \
 	nv_query_supported_vgpu_types.c \

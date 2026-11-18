@@ -431,19 +431,15 @@ static int fwctl_get_dev_name(int fd, char *out, size_t out_sz)
 	return readlink_basename(proc_path, out, out_sz);
 }
 
-int fwctl_get_pci_device_id(int fd, NvU32 *out_device_id)
+static int read_pci_attribute(const char *name, const char *attr, NvU16 *out)
 {
-	char name[64];
 	char sysfs_path[320];
-	char buf[32];
+	char buf[32], *end;
 	FILE *f;
-	unsigned long device_id;
-
-	if (fwctl_get_dev_name(fd, name, sizeof(name)))
-		return -1;
+	unsigned long id;
 
 	snprintf(sysfs_path, sizeof(sysfs_path),
-		 "/sys/class/fwctl/%s/device/device", name);
+		 "/sys/class/fwctl/%s/device/%s", name, attr);
 	f = fopen(sysfs_path, "r");
 	if (!f) {
 		fprintf(stderr, "open %s: %s\n", sysfs_path, strerror(errno));
@@ -456,8 +452,29 @@ int fwctl_get_pci_device_id(int fd, NvU32 *out_device_id)
 	}
 	fclose(f);
 
-	device_id = strtoul(buf, NULL, 16);
-	*out_device_id = (NvU32)device_id;
+	errno = 0;
+	id = strtoul(buf, &end, 16);
+	if (errno || end == buf || id > 0xffffUL ||
+	    (*end != '\0' && (*end != '\n' || end[1] != '\0'))) {
+		fprintf(stderr, "invalid PCI ID from %s\n", sysfs_path);
+		return -1;
+	}
+
+	*out = (NvU16)id;
+	return 0;
+}
+
+int fwctl_get_pci_id(int fd, struct fwctl_pci_id *pci)
+{
+	char name[64];
+
+	if (fwctl_get_dev_name(fd, name, sizeof(name)) ||
+	    read_pci_attribute(name, "vendor", &pci->vendor_id) ||
+	    read_pci_attribute(name, "device", &pci->device_id) ||
+	    read_pci_attribute(name, "subsystem_vendor", &pci->subsystem_vendor_id) ||
+	    read_pci_attribute(name, "subsystem_device", &pci->subsystem_device_id))
+		return -1;
+
 	return 0;
 }
 
